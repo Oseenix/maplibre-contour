@@ -323,7 +323,7 @@
         return segments;
     }
 
-    /******************************************************************************
+    /*! *****************************************************************************
     Copyright (c) Microsoft Corporation.
 
     Permission to use, copy, modify, and/or distribute this software for any
@@ -337,7 +337,7 @@
     OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
     PERFORMANCE OF THIS SOFTWARE.
     ***************************************************************************** */
-    /* global Reflect, Promise, SuppressedError, Symbol, Iterator */
+    /* global Reflect, Promise */
 
 
     function __rest(s, e) {
@@ -361,11 +361,6 @@
             step((generator = generator.apply(thisArg, _arguments || [])).next());
         });
     }
-
-    typeof SuppressedError === "function" ? SuppressedError : function (error, suppressed, message) {
-        var e = new Error(message);
-        return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
-    };
 
     function sortedEntries(object) {
         const entries = Object.entries(object);
