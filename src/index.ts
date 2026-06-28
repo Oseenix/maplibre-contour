@@ -4,11 +4,13 @@ import { decodeParsedImage } from "./decode-image";
 import { LocalDemManager } from "./local-dem-manager";
 import CONFIG from "./config";
 import { HeightTile } from "./height-tile";
+import { detectPressureCenters } from "./pressure-centers";
 
 const exported = {
   generateIsolines,
   DemSource,
   HeightTile,
+  detectPressureCenters,
   LocalDemManager,
   decodeParsedImage,
   set workerUrl(url: string) {

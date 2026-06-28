@@ -3,8 +3,11 @@ import type {
   DemTile,
   GlobalContourTileOptions,
   IndividualContourTileOptions,
+  PressureCenterOptions,
+  PressureCenterTile,
   TransferrableContourTile,
   TransferrableDemTile,
+  TransferrablePressureCenterTile,
 } from "./types";
 
 function sortedEntries(object: any): [string, any][] {
@@ -70,6 +73,48 @@ export function decodeOptions(options: string): GlobalContourTileOptions {
   ) as any as GlobalContourTileOptions;
 }
 
+export function encodePressureCenterOptions(
+  options: PressureCenterOptions,
+): string {
+  return sortedEntries(options)
+    .map(
+      ([key, value]) =>
+        `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+    )
+    .join("&");
+}
+
+export function decodePressureCenterOptions(
+  options: string,
+): PressureCenterOptions {
+  return Object.fromEntries(
+    options
+      .replace(/^.*\?/, "")
+      .split("&")
+      .filter(Boolean)
+      .map((part) => {
+        const parts = part.split("=").map(decodeURIComponent);
+        const key = parts[0] as keyof PressureCenterOptions;
+        let value: any = parts[1];
+        switch (key) {
+          case "extent":
+          case "smoothingKm":
+          case "minProminenceHpa":
+          case "minClosedLevels":
+          case "nearClosedAngleDeg":
+          case "levelStepHpa":
+          case "algorithmVersion":
+            value = Number(value);
+            break;
+          case "debugCandidates":
+          case "debugDenseProbes":
+            value = value === "true";
+        }
+        return [key, value];
+      }),
+  ) as PressureCenterOptions;
+}
+
 export function encodeIndividualOptions(
   options: IndividualContourTileOptions,
 ): string {
@@ -124,6 +169,18 @@ export function prepareDemTile(
 export function prepareContourTile(
   promise: Promise<ContourTile>,
 ): Promise<TransferrableContourTile> {
+  return promise.then(({ arrayBuffer }) => {
+    const clone = copy(arrayBuffer);
+    return {
+      arrayBuffer: clone,
+      transferrables: [clone],
+    };
+  });
+}
+
+export function preparePressureCenterTile(
+  promise: Promise<PressureCenterTile>,
+): Promise<TransferrablePressureCenterTile> {
   return promise.then(({ arrayBuffer }) => {
     const clone = copy(arrayBuffer);
     return {

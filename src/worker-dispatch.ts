@@ -6,9 +6,15 @@ import type {
   FetchResponse,
   IndividualContourTileOptions,
   InitMessage,
+  PressureCenterOptions,
+  PressureCenterTile,
   TransferrableDemTile,
 } from "./types";
-import { prepareContourTile, prepareDemTile } from "./utils";
+import {
+  prepareContourTile,
+  prepareDemTile,
+  preparePressureCenterTile,
+} from "./utils";
 
 const noManager = (managerId: number): Promise<any> =>
   Promise.reject(new Error(`No manager registered for ${managerId}`));
@@ -74,6 +80,40 @@ export default class WorkerDispatch {
         timer,
       ) || noManager(managerId),
     );
+
+  fetchPressureCenterTile = (
+    managerId: number,
+    z: number,
+    x: number,
+    y: number,
+    options: PressureCenterOptions,
+    abortController: AbortController,
+    timer?: Timer,
+  ): Promise<PressureCenterTile> =>
+    preparePressureCenterTile(
+      this.managers[managerId]?.fetchPressureCenterTile(
+        z,
+        x,
+        y,
+        options,
+        abortController,
+        timer,
+      ) || noManager(managerId),
+    );
+
+  preloadPressureCenters = (
+    managerId: number,
+    source: DemSourceSnapshot,
+    options: PressureCenterOptions,
+    abortController: AbortController,
+    timer?: Timer,
+  ): Promise<void> =>
+    this.managers[managerId]?.preloadPressureCenters(
+      source,
+      options,
+      abortController,
+      timer,
+    ) || noManager(managerId);
 
   setSource = (
     managerId: number,

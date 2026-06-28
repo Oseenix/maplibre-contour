@@ -12,6 +12,8 @@ import type {
   Encoding,
   FetchResponse,
   IndividualContourTileOptions,
+  PressureCenterOptions,
+  PressureCenterTile,
 } from "./types";
 import { prepareDemTile } from "./utils";
 
@@ -111,6 +113,42 @@ export default class RemoteDemManager implements DemManager {
       z,
       x,
       y,
+      options,
+    );
+
+  fetchPressureCenterTile = (
+    z: number,
+    x: number,
+    y: number,
+    options: PressureCenterOptions,
+    abortController: AbortController,
+    timer?: Timer,
+  ): Promise<PressureCenterTile> =>
+    this.actor.send(
+      "fetchPressureCenterTile",
+      [],
+      abortController,
+      timer,
+      this.managerId,
+      z,
+      x,
+      y,
+      options,
+    );
+
+  preloadPressureCenters = (
+    source: DemSourceSnapshot,
+    options: PressureCenterOptions,
+    abortController: AbortController,
+    timer?: Timer,
+  ): Promise<void> =>
+    this.actor.send(
+      "preloadPressureCenters",
+      [],
+      abortController,
+      timer,
+      this.managerId,
+      source,
       options,
     );
 

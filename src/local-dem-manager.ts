@@ -2,7 +2,16 @@ import AsyncCache from "./cache";
 import defaultDecodeImage from "./decode-image";
 import { HeightTile } from "./height-tile";
 import generateIsolines from "./isolines";
-import { encodeIndividualOptions, isAborted, withTimeout } from "./utils";
+import {
+  encodeIndividualOptions,
+  encodePressureCenterOptions,
+  isAborted,
+  withTimeout,
+} from "./utils";
+import {
+  detectPressureCenters,
+  encodePressureCenterTile,
+} from "./pressure-centers";
 import type {
   ContourTile,
   DecodeImageFunction,
@@ -14,6 +23,9 @@ import type {
   FetchResponse,
   GetTileFunction,
   IndividualContourTileOptions,
+  PressureCenter,
+  PressureCenterOptions,
+  PressureCenterTile,
 } from "./types";
 import encodeVectorTile, { GeomType } from "./vtpbf";
 import { Timer } from "./performance";
@@ -43,6 +55,8 @@ export class LocalDemManager implements DemManager {
   tileCache: AsyncCache<string, FetchResponse>;
   parsedCache: AsyncCache<string, DemTile>;
   contourCache: AsyncCache<string, ContourTile>;
+  pressureCenterCache: AsyncCache<string, PressureCenter[]>;
+  pressureCenterTileCache: AsyncCache<string, PressureCenterTile>;
   activeSource: DemSourceSnapshot;
   sources: Map<string, DemSourceSnapshot>;
   encoding: Encoding;
@@ -56,6 +70,8 @@ export class LocalDemManager implements DemManager {
     this.tileCache = new AsyncCache(options.cacheSize);
     this.parsedCache = new AsyncCache(options.cacheSize);
     this.contourCache = new AsyncCache(options.cacheSize);
+    this.pressureCenterCache = new AsyncCache(Math.max(8, options.cacheSize));
+    this.pressureCenterTileCache = new AsyncCache(options.cacheSize);
     this.timeoutMs = options.timeoutMs;
     this.activeSource = options.source;
     this.sources = new Map([[options.source.key, options.source]]);
@@ -295,6 +311,144 @@ export class LocalDemManager implements DemManager {
         mark?.();
 
         return { arrayBuffer: result.slice().buffer };
+      },
+      parentAbortController,
+    );
+  }
+
+  private async fetchWorldPressureTileForSource(
+    source: DemSourceSnapshot,
+    abortController: AbortController,
+    timer?: Timer,
+  ): Promise<HeightTile> {
+    const zoom = this.maxzoom;
+    const tileCount = 1 << zoom;
+    const tiles = new Array<DemTile>(tileCount * tileCount);
+    const jobs: { x: number; y: number; index: number }[] = [];
+
+    for (let y = 0; y < tileCount; y++) {
+      for (let x = 0; x < tileCount; x++) {
+        jobs.push({ x, y, index: y * tileCount + x });
+      }
+    }
+
+    let cursor = 0;
+    const workerCount = Math.min(8, jobs.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (cursor < jobs.length) {
+        if (isAborted(abortController)) throw new Error("canceled");
+        const job = jobs[cursor++];
+        tiles[job.index] = await this.fetchAndParseTileForSource(
+          source,
+          zoom,
+          job.x,
+          job.y,
+          abortController,
+          timer,
+        );
+      }
+    });
+    // 中文注释：世界压力场只为当前时间片拼一次；有限并发能加快切换时间，同时避免瞬时请求过载。
+    await Promise.all(workers);
+
+    const first = tiles[0];
+    const tileWidth = first.width;
+    const tileHeight = first.height;
+    const width = tileWidth * tileCount;
+    const height = tileHeight * tileCount;
+    const data = new Float32Array(width * height);
+
+    // 中文注释：把低 zoom pressure tiles 拼成一个连续世界网格，H/L 检测只对该时间片运行一次。
+    tiles.forEach((tile, tileIndex) => {
+      const tx = tileIndex % tileCount;
+      const ty = Math.floor(tileIndex / tileCount);
+      for (let y = 0; y < tileHeight; y++) {
+        for (let x = 0; x < tileWidth; x++) {
+          const worldX = tx * tileWidth + x;
+          const worldY = ty * tileHeight + y;
+          data[worldY * width + worldX] = tile.data[y * tileWidth + x];
+        }
+      }
+    });
+
+    return new HeightTile(width, height, (x, y) => {
+      if (y < 0 || y >= height) return NaN;
+      const wrappedX = ((x % width) + width) % width;
+      return data[y * width + wrappedX];
+    });
+  }
+
+  private fetchPressureCentersForSource(
+    source: DemSourceSnapshot,
+    options: PressureCenterOptions,
+    parentAbortController: AbortController,
+    timer?: Timer,
+  ): Promise<PressureCenter[]> {
+    const optionsKey = encodePressureCenterOptions(options);
+    const key = [source.key, "pressure-centers", optionsKey].join("/");
+
+    return this.pressureCenterCache.get(
+      key,
+      async (_, childAbortController) => {
+        const tile = await this.fetchWorldPressureTileForSource(
+          source,
+          childAbortController,
+          timer,
+        );
+        if (isAborted(childAbortController)) throw new Error("canceled");
+        const mark = timer?.marker("isoline");
+        const centers = detectPressureCenters(tile, 0, options);
+        mark?.();
+        return centers;
+      },
+      parentAbortController,
+    );
+  }
+
+  preloadPressureCenters(
+    source: DemSourceSnapshot,
+    options: PressureCenterOptions,
+    parentAbortController: AbortController,
+    timer?: Timer,
+  ): Promise<void> {
+    this.sources.set(source.key, source);
+    // 中文注释：预热只填充指定 source 的 H/L 缓存，不切换当前 activeSource，避免影响可见图层请求。
+    return this.fetchPressureCentersForSource(
+      source,
+      options,
+      parentAbortController,
+      timer,
+    ).then(() => undefined);
+  }
+
+  fetchPressureCenterTile(
+    z: number,
+    x: number,
+    y: number,
+    options: PressureCenterOptions,
+    parentAbortController: AbortController,
+    timer?: Timer,
+  ): Promise<PressureCenterTile> {
+    const source = this.activeSource;
+    const key = [
+      source.key,
+      "pressure-center-tile",
+      z,
+      x,
+      y,
+      encodePressureCenterOptions(options),
+    ].join("/");
+
+    return this.pressureCenterTileCache.get(
+      key,
+      async (_, childAbortController) => {
+        const centers = await this.fetchPressureCentersForSource(
+          source,
+          options,
+          childAbortController,
+          timer,
+        );
+        return encodePressureCenterTile(centers, z, x, y, options);
       },
       parentAbortController,
     );

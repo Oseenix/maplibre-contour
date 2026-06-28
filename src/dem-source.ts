@@ -1,11 +1,18 @@
 import { LocalDemManager } from "./local-dem-manager";
-import { decodeOptions, encodeOptions, getOptionsForZoom } from "./utils";
+import {
+  decodeOptions,
+  decodePressureCenterOptions,
+  encodeOptions,
+  encodePressureCenterOptions,
+  getOptionsForZoom,
+} from "./utils";
 import RemoteDemManager from "./remote-dem-manager";
 import type {
   DemManager,
   DemSourceSnapshot,
   DemTile,
   GlobalContourTileOptions,
+  PressureCenterOptions,
   Timing,
 } from "./types";
 import type WorkerDispatch from "./worker-dispatch";
@@ -99,7 +106,9 @@ const sourceSnapshot = (url: string, key = url): DemSourceSnapshot => ({
 export class DemSource {
   sharedDemProtocolId: string;
   contourProtocolId: string;
+  pressureCentersProtocolId: string;
   contourProtocolUrlBase: string;
+  pressureCentersProtocolUrlBase: string;
   manager: DemManager;
   sharedDemProtocolUrl: string;
   timingCallbacks: Array<(timing: Timing) => void> = [];
@@ -137,8 +146,10 @@ export class DemSource {
     used.add(protocolPrefix);
     this.sharedDemProtocolId = `${protocolPrefix}-shared`;
     this.contourProtocolId = `${protocolPrefix}-contour`;
+    this.pressureCentersProtocolId = `${protocolPrefix}-pressure-centers`;
     this.sharedDemProtocolUrl = `${this.sharedDemProtocolId}://{z}/{x}/{y}`;
     this.contourProtocolUrlBase = `${this.contourProtocolId}://{z}/{x}/{y}`;
+    this.pressureCentersProtocolUrlBase = `${this.pressureCentersProtocolId}://{z}/{x}/{y}`;
     const ManagerClass = worker ? RemoteDemManager : LocalDemManager;
     this.manager = new ManagerClass({
       source: sourceSnapshot(url),
@@ -179,6 +190,10 @@ export class DemSource {
   }) => {
     maplibre.addProtocol(this.sharedDemProtocolId, this.sharedDemProtocol);
     maplibre.addProtocol(this.contourProtocolId, this.contourProtocol);
+    maplibre.addProtocol(
+      this.pressureCentersProtocolId,
+      this.pressureCentersProtocol,
+    );
   };
 
   parseUrl(url: string): [number, number, number] {
@@ -250,8 +265,43 @@ export class DemSource {
     }
   };
 
+  /**
+   * Callback to generate pressure-center point vector tiles from the active
+   * pressure source. The expensive meteorological detection is cached per
+   * source/options; this request path only slices cached centers into MVT.
+   */
+  pressureCentersProtocolV4: AddProtocolAction = async (
+    request: RequestParameters,
+    abortController: AbortController,
+  ) => {
+    const timer = new Timer("main");
+    let timing: Timing;
+    try {
+      const [z, x, y] = this.parseUrl(request.url);
+      const options = decodePressureCenterOptions(request.url);
+      const data = await this.manager.fetchPressureCenterTile(
+        z,
+        x,
+        y,
+        options,
+        abortController,
+        timer,
+      );
+      timing = timer.finish(request.url);
+      return { data: data.arrayBuffer };
+    } catch (error) {
+      timing = timer.error(request.url);
+      throw error;
+    } finally {
+      this.timingCallbacks.forEach((cb) => cb(timing));
+    }
+  };
+
   contourProtocol: V3OrV4Protocol = v3compat(this.contourProtocolV4);
   sharedDemProtocol: V3OrV4Protocol = v3compat(this.sharedDemProtocolV4);
+  pressureCentersProtocol: V3OrV4Protocol = v3compat(
+    this.pressureCentersProtocolV4,
+  );
 
   /**
    * Returns a URL with the correct maplibre protocol prefix and all `option` encoded in request parameters.
@@ -260,6 +310,28 @@ export class DemSource {
     const version = this.sourceVersion > 0 ? `/${this.sourceVersion}` : "";
     return `${this.contourProtocolUrlBase}${version}?${encodeOptions(options)}`;
   };
+
+  pressureCentersProtocolUrl = (options: PressureCenterOptions) => {
+    const version = this.sourceVersion > 0 ? `/${this.sourceVersion}` : "";
+    return `${this.pressureCentersProtocolUrlBase}${version}?${encodePressureCenterOptions(options)}`;
+  };
+
+  /**
+   * Warms pressure-center detection for a DEM source without switching the
+   * currently visible source used by protocol tile requests.
+   */
+  preloadPressureCenters(
+    url: string,
+    key: string,
+    options: PressureCenterOptions,
+    abortController = new AbortController(),
+  ): Promise<void> {
+    return this.manager.preloadPressureCenters(
+      sourceSnapshot(url, key),
+      options,
+      abortController,
+    );
+  }
 
   /**
    * Switches the DEM tile URL used for future contour requests.

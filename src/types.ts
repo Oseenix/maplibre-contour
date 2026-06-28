@@ -24,6 +24,50 @@ export interface TransferrableContourTile
   extends ContourTile,
     IsTransferrable {}
 
+/** A rendered pressure-center point vector tile. */
+export interface PressureCenterTile {
+  /** Encoded mapbox vector tile bytes */
+  arrayBuffer: ArrayBuffer;
+}
+export interface TransferrablePressureCenterTile
+  extends PressureCenterTile,
+    IsTransferrable {}
+
+export type PressureCenterKind = "H" | "L";
+
+export interface PressureCenter {
+  /** Center kind: high pressure or low pressure. */
+  kind: PressureCenterKind;
+  /** Whether this point is an accepted center, rejected candidate, or debug probe. */
+  status?: "accepted" | "rejected" | "probe";
+  /** Rejection reason when status is rejected. */
+  rejectReason?: string;
+  /** Normalized world x coordinate in [0, 1). */
+  x: number;
+  /** Normalized world y coordinate in [0, 1). */
+  y: number;
+  /** Raw pressure at the center, in hPa. */
+  pressure: number;
+  /** Smoothed pressure used by the detector, in hPa. */
+  smoothPressure?: number;
+  /** Pressure-system prominence relative to the separating saddle, in hPa. */
+  prominence: number;
+  /** Collision priority and diagnostic score. */
+  confidence: number;
+  /** Near-closed contour angular coverage score in [0, 1]. */
+  closedContourScore: number;
+  /** Estimated separating saddle pressure, in hPa. */
+  saddlePressure: number;
+  /** Number of enclosing isobar levels confirmed by topology flood fill. */
+  closedLevels?: number;
+  /** First enclosing isobar level, in hPa. */
+  enclosingLevel?: number;
+  /** Approximate enclosed area, in square kilometers. */
+  areaKm2?: number;
+  /** Algorithm version that produced this feature. */
+  algorithmVersion: number;
+}
+
 export interface FetchResponse {
   data: Blob;
   expires?: string;
@@ -78,6 +122,29 @@ export interface GlobalContourTileOptions extends ContourTileOptions {
 
 export interface IndividualContourTileOptions extends ContourTileOptions {
   levels: number[];
+}
+
+export interface PressureCenterOptions {
+  /** Name of the vector tile layer that contains H/L point features. */
+  pressureCenterLayer?: string;
+  /** Grid size of the vector tile (default 4096). */
+  extent?: number;
+  /** Gaussian smoothing scale used for synoptic pressure-system recognition. */
+  smoothingKm?: number;
+  /** Minimum pressure prominence required for a valid H/L system. */
+  minProminenceHpa?: number;
+  /** Minimum number of closed or near-closed levels around a system center. */
+  minClosedLevels?: number;
+  /** Angular coverage required for near-closed isobar validation. */
+  nearClosedAngleDeg?: number;
+  /** Main isobar step used for closed-contour validation. */
+  levelStepHpa?: number;
+  /** Bumps cache keys when the detector changes. */
+  algorithmVersion?: number;
+  /** Include rejected H/L candidates for map debugging. */
+  debugCandidates?: boolean;
+  /** Include dense diagnostic probes for areas that are not pressure extrema. */
+  debugDenseProbes?: boolean;
 }
 
 export interface Image {
@@ -143,6 +210,20 @@ export interface DemManager {
     abortController: AbortController,
     timer?: Timer,
   ): Promise<ContourTile>;
+  fetchPressureCenterTile(
+    z: number,
+    x: number,
+    y: number,
+    options: PressureCenterOptions,
+    abortController: AbortController,
+    timer?: Timer,
+  ): Promise<PressureCenterTile>;
+  preloadPressureCenters(
+    source: DemSourceSnapshot,
+    options: PressureCenterOptions,
+    abortController: AbortController,
+    timer?: Timer,
+  ): Promise<void>;
   /** Switches to a DEM tile source and returns false when the active source is unchanged */
   setSource(source: DemSourceSnapshot): boolean;
   /** Updates the DEM tile URL pattern */
